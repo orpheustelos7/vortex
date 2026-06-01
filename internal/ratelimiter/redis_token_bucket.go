@@ -1,32 +1,32 @@
 package ratelimiter
 
 import (
-"context"
-"fmt"
-"time"
+	"context"
+	"fmt"
+	"time"
 
-"github.com/redis/go-redis/v9"
+	"github.com/redis/go-redis/v9"
 )
 
 type Result struct {
-Allowed   bool
-Remaining int64
-RetryAfter time.Duration
+	Allowed    bool
+	Remaining  int64
+	RetryAfter time.Duration
 }
 
 type Limiter interface {
-Allow(ctx context.Context, tenant string, rate float64, burst int64) (Result, error)
+	Allow(ctx context.Context, tenant string, rate float64, burst int64) (Result, error)
 }
 
 type RedisTokenBucket struct {
-client *redis.Client
-script *redis.Script
+	client *redis.Client
+	script *redis.Script
 }
 
 func NewRedisTokenBucket(client *redis.Client) *RedisTokenBucket {
-return &RedisTokenBucket{
-client: client,
-script: redis.NewScript(`
+	return &RedisTokenBucket{
+		client: client,
+		script: redis.NewScript(`
 local key = KEYS[1]
 local now = tonumber(ARGV[1])
 local rate = tonumber(ARGV[2])
@@ -60,32 +60,32 @@ redis.call("PEXPIRE", key, math.ceil((capacity / rate) * 1000 * 2))
 
 return {allowed, math.floor(tokens), retry_ms}
 `),
-}
+	}
 }
 
 func (r *RedisTokenBucket) Allow(ctx context.Context, tenant string, rate float64, burst int64) (Result, error) {
-if tenant == "" {
-return Result{}, fmt.Errorf("tenant is required")
-}
-if rate <= 0 || burst <= 0 {
-return Result{}, fmt.Errorf("invalid rate limit parameters")
-}
+	if tenant == "" {
+		return Result{}, fmt.Errorf("tenant is required")
+	}
+	if rate <= 0 || burst <= 0 {
+		return Result{}, fmt.Errorf("invalid rate limit parameters")
+	}
 
-key := fmt.Sprintf("vortex:bucket:%s", tenant)
-now := time.Now().UnixMilli()
-res, err := r.script.Run(ctx, r.client, []string{key}, now, rate, burst, 1).Result()
-if err != nil {
-return Result{}, err
-}
+	key := fmt.Sprintf("vortex:bucket:%s", tenant)
+	now := time.Now().UnixMilli()
+	res, err := r.script.Run(ctx, r.client, []string{key}, now, rate, burst, 1).Result()
+	if err != nil {
+		return Result{}, err
+	}
 
-vals, ok := res.([]interface{})
-if !ok || len(vals) != 3 {
-return Result{}, fmt.Errorf("unexpected limiter result")
-}
+	vals, ok := res.([]interface{})
+	if !ok || len(vals) != 3 {
+		return Result{}, fmt.Errorf("unexpected limiter result")
+	}
 
-allowed := vals[0].(int64) == 1
-remaining := vals[1].(int64)
-retryMs := vals[2].(int64)
+	allowed := vals[0].(int64) == 1
+	remaining := vals[1].(int64)
+	retryMs := vals[2].(int64)
 
-return Result{Allowed: allowed, Remaining: remaining, RetryAfter: time.Duration(retryMs) * time.Millisecond}, nil
+	return Result{Allowed: allowed, Remaining: remaining, RetryAfter: time.Duration(retryMs) * time.Millisecond}, nil
 }
