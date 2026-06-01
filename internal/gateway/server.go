@@ -1,13 +1,12 @@
 package gateway
 
 import (
-	"context"
-	"fmt"
 	"log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/orpheustelos7/vortex/internal/auth"
@@ -20,10 +19,12 @@ type Server struct {
 	store   *config.Store
 	limiter ratelimiter.Limiter
 	metrics *observability.Metrics
+	mu      sync.RWMutex
+	proxies map[string]*httputil.ReverseProxy
 }
 
 func New(store *config.Store, limiter ratelimiter.Limiter, metrics *observability.Metrics) *Server {
-	return &Server{store: store, limiter: limiter, metrics: metrics}
+	return &Server{store: store, limiter: limiter, metrics: metrics, proxies: make(map[string]*httputil.ReverseProxy)}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -78,7 +79,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("X-RateLimit-Remaining", strconv.FormatInt(result.Remaining, 10))
 
-	target, err := url.Parse(policy.BackendURL)
+	proxy, err := s.getProxy(policy.BackendURL)
 	if err != nil {
 		http.Error(w, "invalid backend", http.StatusInternalServerError)
 		s.metrics.Errors.WithLabelValues("backend_url").Inc()
@@ -86,18 +87,48 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	proxy := httputil.NewSingleHostReverseProxy(target)
-	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		log.Printf("proxy error tenant=%s: %v", tenant, err)
-		http.Error(w, "upstream error", http.StatusBadGateway)
+	recorder := &statusRecorder{ResponseWriter: w, statusCode: http.StatusOK}
+	proxy.ServeHTTP(recorder, r)
+	if recorder.statusCode >= http.StatusInternalServerError {
 		s.metrics.Errors.WithLabelValues("upstream").Inc()
-		s.metrics.Observe(tenant, http.StatusBadGateway, started)
 	}
-	proxy.ModifyResponse = func(resp *http.Response) error {
-		s.metrics.Observe(tenant, resp.StatusCode, started)
-		return nil
+	s.metrics.Observe(tenant, recorder.statusCode, started)
+}
+
+func (s *Server) getProxy(backendURL string) (*httputil.ReverseProxy, error) {
+	s.mu.RLock()
+	proxy := s.proxies[backendURL]
+	s.mu.RUnlock()
+	if proxy != nil {
+		return proxy, nil
 	}
 
-	ctx := context.WithValue(r.Context(), struct{}{}, fmt.Sprintf("tenant:%s", tenant))
-	proxy.ServeHTTP(w, r.WithContext(ctx))
+	target, err := url.Parse(backendURL)
+	if err != nil {
+		return nil, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if existing := s.proxies[backendURL]; existing != nil {
+		return existing, nil
+	}
+
+	proxy = httputil.NewSingleHostReverseProxy(target)
+	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		log.Printf("proxy error backend=%s: %v", backendURL, err)
+		http.Error(w, "upstream error", http.StatusBadGateway)
+	}
+	s.proxies[backendURL] = proxy
+	return proxy, nil
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (r *statusRecorder) WriteHeader(statusCode int) {
+	r.statusCode = statusCode
+	r.ResponseWriter.WriteHeader(statusCode)
 }

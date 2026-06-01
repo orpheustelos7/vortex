@@ -2,6 +2,7 @@ package observability
 
 import (
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -30,6 +31,6 @@ func (m *Metrics) Handler() http.Handler {
 }
 
 func (m *Metrics) Observe(tenant string, status int, started time.Time) {
-	m.Requests.WithLabelValues(tenant, http.StatusText(status)).Inc()
+	m.Requests.WithLabelValues(tenant, strconv.Itoa(status)).Inc()
 	m.Latency.WithLabelValues(tenant).Observe(time.Since(started).Seconds())
 }

@@ -37,7 +37,7 @@ local values = redis.call("HMGET", key, "tokens", "ts")
 local tokens = tonumber(values[1])
 local ts = tonumber(values[2])
 
-if tokens == nil then
+if values[1] == false or tokens == nil then
   tokens = capacity
   ts = now
 end
