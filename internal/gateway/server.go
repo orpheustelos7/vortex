@@ -120,7 +120,9 @@ func (s *Server) getProxy(backendURL string) (*httputil.ReverseProxy, error) {
 		if recorder, ok := w.(*statusRecorder); ok {
 			recorder.statusCode = http.StatusBadGateway
 		}
-		http.Error(w, "upstream error", http.StatusBadGateway)
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte("upstream error\n"))
 	}
 	s.proxies[backendURL] = proxy
 	return proxy, nil

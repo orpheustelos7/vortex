@@ -11,6 +11,7 @@ import (
 )
 
 const policyPrefix = "/vortex/policies/"
+const maxWatchBackoff = 2 * time.Second
 
 type Watcher struct {
 	client *clientv3.Client
@@ -62,7 +63,7 @@ func (w *Watcher) Watch(ctx context.Context) {
 			return
 		case <-timer.C:
 		}
-		if backoff < 2*time.Second {
+		if backoff < maxWatchBackoff {
 			backoff *= 2
 		}
 	}

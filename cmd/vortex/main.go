@@ -19,6 +19,8 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
+const shutdownTimeout = 10 * time.Second
+
 func main() {
 	listenAddr := getenv("LISTEN_ADDR", ":8080")
 	redisAddr := getenv("REDIS_ADDR", "localhost:6379")
@@ -68,7 +70,7 @@ func main() {
 	<-sigCh
 
 	cancelWatch()
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer shutdownCancel()
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		log.Printf("graceful shutdown failed: %v", err)
