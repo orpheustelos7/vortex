@@ -28,7 +28,9 @@ func main() {
 
 	redisClient := redis.NewClient(&redis.Options{Addr: redisAddr})
 	defer redisClient.Close()
-	if err := redisClient.Ping(context.Background()).Err(); err != nil {
+	pingCtx, pingCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer pingCancel()
+	if err := redisClient.Ping(pingCtx).Err(); err != nil {
 		log.Fatalf("redis unavailable: %v", err)
 	}
 
