@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/orpheustelos7/vortex/internal/config"
@@ -22,6 +25,7 @@ func main() {
 	etcdEndpoints := strings.Split(getenv("ETCD_ENDPOINTS", "localhost:2379"), ",")
 
 	redisClient := redis.NewClient(&redis.Options{Addr: redisAddr})
+	defer redisClient.Close()
 	if err := redisClient.Ping(context.Background()).Err(); err != nil {
 		log.Fatalf("redis unavailable: %v", err)
 	}
@@ -40,15 +44,34 @@ func main() {
 	if err := watcher.LoadInitial(context.Background()); err != nil {
 		log.Fatalf("failed loading policies: %v", err)
 	}
-	go watcher.Watch(context.Background())
+	watchCtx, cancelWatch := context.WithCancel(context.Background())
+	defer cancelWatch()
+	go watcher.Watch(watchCtx)
 
 	metrics := observability.NewMetrics()
 	limiter := ratelimiter.NewRedisTokenBucket(redisClient)
 	server := gateway.New(store, limiter, metrics)
+	httpServer := &http.Server{
+		Addr:    listenAddr,
+		Handler: server.Handler(),
+	}
 
 	log.Printf("vortex listening on %s", listenAddr)
-	if err := http.ListenAndServe(listenAddr, server.Handler()); err != nil {
-		log.Fatal(err)
+	go func() {
+		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("server failed: %v", err)
+		}
+	}()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	<-sigCh
+
+	cancelWatch()
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		log.Printf("graceful shutdown failed: %v", err)
 	}
 }
 

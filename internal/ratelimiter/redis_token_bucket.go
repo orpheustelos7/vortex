@@ -55,7 +55,7 @@ else
   retry_ms = math.ceil(((requested - tokens) / rate) * 1000)
 end
 
-redis.call("HMSET", key, "tokens", tokens, "ts", now)
+redis.call("HSET", key, "tokens", tokens, "ts", now)
 redis.call("PEXPIRE", key, math.ceil((capacity / rate) * 1000 * 2))
 
 return {allowed, math.floor(tokens), retry_ms}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"strings"
+	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
@@ -32,20 +33,37 @@ func (w *Watcher) LoadInitial(ctx context.Context) error {
 }
 
 func (w *Watcher) Watch(ctx context.Context) {
-	ch := w.client.Watch(ctx, policyPrefix, clientv3.WithPrefix())
-	for watchResp := range ch {
-		if watchResp.Err() != nil {
-			log.Printf("etcd watch error: %v", watchResp.Err())
-			continue
-		}
-		for _, ev := range watchResp.Events {
-			switch ev.Type {
-			case clientv3.EventTypeDelete:
-				tenant := strings.TrimPrefix(string(ev.Kv.Key), policyPrefix)
-				w.store.Delete(tenant)
-			case clientv3.EventTypePut:
-				w.applyValue(ev.Kv.Key, ev.Kv.Value)
+	backoff := 100 * time.Millisecond
+	for {
+		ch := w.client.Watch(ctx, policyPrefix, clientv3.WithPrefix())
+		for watchResp := range ch {
+			if watchResp.Err() != nil {
+				log.Printf("etcd watch error: %v", watchResp.Err())
+				break
 			}
+			backoff = 100 * time.Millisecond
+			for _, ev := range watchResp.Events {
+				switch ev.Type {
+				case clientv3.EventTypeDelete:
+					tenant := strings.TrimPrefix(string(ev.Kv.Key), policyPrefix)
+					w.store.Delete(tenant)
+				case clientv3.EventTypePut:
+					w.applyValue(ev.Kv.Key, ev.Kv.Value)
+				}
+			}
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+		if backoff < 2*time.Second {
+			backoff *= 2
 		}
 	}
 }
