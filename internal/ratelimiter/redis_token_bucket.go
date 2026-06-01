@@ -83,9 +83,18 @@ func (r *RedisTokenBucket) Allow(ctx context.Context, tenant string, rate float6
 		return Result{}, fmt.Errorf("unexpected limiter result")
 	}
 
-	allowed := vals[0].(int64) == 1
-	remaining := vals[1].(int64)
-	retryMs := vals[2].(int64)
+	allowedRaw, ok := vals[0].(int64)
+	if !ok {
+		return Result{}, fmt.Errorf("unexpected allow result type %T", vals[0])
+	}
+	remaining, ok := vals[1].(int64)
+	if !ok {
+		return Result{}, fmt.Errorf("unexpected remaining result type %T", vals[1])
+	}
+	retryMs, ok := vals[2].(int64)
+	if !ok {
+		return Result{}, fmt.Errorf("unexpected retry result type %T", vals[2])
+	}
 
-	return Result{Allowed: allowed, Remaining: remaining, RetryAfter: time.Duration(retryMs) * time.Millisecond}, nil
+	return Result{Allowed: allowedRaw == 1, Remaining: remaining, RetryAfter: time.Duration(retryMs) * time.Millisecond}, nil
 }
